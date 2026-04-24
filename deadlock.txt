@@ -1,0 +1,206 @@
+#Shahd Raed & Nadeen Ali 
+import re
+from collections import deque
+class Process:
+    def __init__(self, pid, arrival_time, priority):
+        self.pid = pid
+        self.arrival_time = arrival_time
+        self.priority = priority
+        self.cpu_bursts = []  # List to store CPU bursts
+        self.io_bursts = []  # List to store IO bursts
+        self.resources_requested = []  # List to store requested resources
+        self.resources_allocated = []  # List to store allocated resources
+        self.waiting_for = []  # List to store resources the process is waiting for
+        self.remaining_cpu = 0  # Remaining CPU burst time
+        self.waiting_time = 0  # Waiting time
+        self.turnaround_time = 0  # Turnaround time
+        self.completion_time = 0  # Completion time
+        self.current_burst_index = 0  # Index for the current burst
+
+
+class Resource_Manager:
+    def __init__(self, resource_count):
+        self.available_resources = {r: 1 for r in range(resource_count)}
+        self.waiting_processes = []  # Processes waiting for resources
+
+    def allocate_resource(self, process, resource):
+        if self.available_resources[resource] > 0:
+            self.available_resources[resource] -= 1
+            process.resources_allocated.append(resource)
+            return True
+        else:
+            process.waiting_for.append(resource)
+            self.waiting_processes.append(process)
+            return False
+
+    def release_resource(self, process, resource):
+        if resource in process.resources_allocated:
+            process.resources_allocated.remove(resource)
+            self.available_resources[resource] += 1
+            self.reallocate_waiting(resource)
+
+    def reallocate_waiting(self, resource):
+        for process in list(self.waiting_processes):
+            if resource in process.waiting_for:
+                if self.allocate_resource(process, resource):
+                    process.waiting_for.remove(resource)
+                    self.waiting_processes.remove(process)
+
+    def detect_deadlock(self):
+        graph = {p.pid: set(p.waiting_for) for p in self.waiting_processes}
+        visited = set()
+
+        def has_cycle(process_id, stack):
+            if process_id in stack:
+                return True
+            if process_id in visited:
+                return False
+            visited.add(process_id)
+            stack.add(process_id)
+            for resource in graph.get(process_id, []):
+                for p in self.waiting_processes:
+                    if resource in p.resources_allocated:
+                        if has_cycle(p.pid, stack):
+                            return True
+            stack.remove(process_id)
+            return False
+
+        for process in self.waiting_processes:
+            if has_cycle(process.pid, set()):
+                return True
+        return False
+
+    def recover_deadlock(self):
+        if self.detect_deadlock():
+            victim = self.waiting_processes.pop(0)
+            print(f"Deadlock detected! Terminating Process {victim.pid}")
+            for resource in victim.resources_allocated:
+                self.release_resource(victim, resource)
+            return victim
+        return None
+
+
+def burst_data(burst_data_str, process):
+    cpu_pattern = re.compile(r'CPU\s*{([^}]*)}')
+    io_pattern = re.compile(r'IO\s*{([^}]*)}')
+
+    cpu_matches = cpu_pattern.findall(burst_data_str)
+    for match in cpu_matches:
+        tokens = match.split(',')
+        for token in tokens:
+            token = token.strip()
+            if token.startswith('R'):
+                process.resources_requested.append(int(token[2:-1]))  # Strip "R" and extract resource number
+            elif token.startswith('F'):
+                continue  # Ignore resource freeing
+            else:
+                process.cpu_bursts.append(int(token))  # CPU burst time
+
+    io_matches = io_pattern.findall(burst_data_str)
+    for match in io_matches:
+        process.io_bursts.append(int(match.strip()))  # IO burst time
+
+
+def Reading_file(file_name):
+    processes = []
+    with open(file_name, "r") as file:
+        for line in file:
+            parts = re.split(r'\s+', line.strip(), maxsplit=3)
+            pid = int(parts[0])
+            arrival_time = int(parts[1])
+            priority = int(parts[2])
+            burst_data_str = parts[3]  # Avoid overwriting 'burst_data' function name
+
+            process = Process(pid, arrival_time, priority)
+            burst_data(burst_data_str, process)  # Call the function correctly with the string data
+            processes.append(process)
+    return processes
+
+
+def scheduling(processes, resource_manager, time_quantum):
+    time = 0
+    gantt_chart = []
+    ready_queue = deque()
+    completed_processes = []
+
+    # Sort processes by arrival time
+    processes.sort(key=lambda p: p.arrival_time)
+
+    while len(completed_processes) < len(processes):
+        # Add processes that have arrived to the ready queue
+        while processes and processes[0].arrival_time <= time:
+            arriving_process = processes.pop(0)
+            arriving_process.remaining_cpu = arriving_process.cpu_bursts[0] if arriving_process.cpu_bursts else 0
+            ready_queue.append(arriving_process)
+
+        if ready_queue:
+            # Sort the ready queue by priority
+            ready_queue = deque(sorted(ready_queue, key=lambda p: p.priority))
+            current_process = ready_queue.popleft()
+            start_time = time
+            burst_time = min(current_process.remaining_cpu, time_quantum)
+            time += burst_time
+            gantt_chart.append((current_process.pid, start_time, time))
+
+            current_process.remaining_cpu -= burst_time
+
+            if current_process.remaining_cpu == 0:
+                current_process.completion_time = time
+                current_process.turnaround_time = time - current_process.arrival_time
+                current_process.waiting_time = (
+                    current_process.turnaround_time - sum(current_process.cpu_bursts)
+                )
+                completed_processes.append(current_process)
+            else:
+                ready_queue.append(current_process)
+        else:
+            time += 1
+
+    if completed_processes:
+        avg_waiting_time = sum(p.waiting_time for p in completed_processes) / len(completed_processes)
+        avg_turnaround_time = sum(p.turnaround_time for p in completed_processes) / len(completed_processes)
+    else:
+        avg_waiting_time = 0
+        avg_turnaround_time = 0
+
+    return gantt_chart, avg_waiting_time, avg_turnaround_time, completed_processes
+
+
+def print_gantt_chart(gantt_chart):
+    for pid, start, end in gantt_chart:
+        print(f"P{pid}[{start}-{end}]", end=" ")
+    print()
+
+
+def print_process_info(completed_processes):
+    print("Process Information:")
+    for process in completed_processes:
+        print(f"Process {process.pid}:")
+        print(f"  Arrival Time: {process.arrival_time}")
+        print(f"  Priority: {process.priority}")
+        print(f"  CPU Bursts: {process.cpu_bursts}")
+        print(f"  I/O Bursts: {process.io_bursts}")
+        print(f"  Waiting Time: {process.waiting_time}")
+        print(f"  Turnaround Time: {process.turnaround_time}")
+        print(f"  Completion Time: {process.completion_time}")
+        print()
+
+
+if __name__ == "__main__":
+    file_name = "input.txt"
+    time_quantum = 10
+    resource_count = 5
+
+    processes = Reading_file(file_name)
+    resource_manager = Resource_Manager(resource_count)
+
+    for process in processes:
+        process.remaining_cpu = process.cpu_bursts[0] if process.cpu_bursts else 0
+
+    gantt_chart, avg_waiting_time, avg_turnaround_time, completed_processes = scheduling(processes, resource_manager, time_quantum)
+
+    print("Gantt Chart:")
+    print_gantt_chart(gantt_chart)
+    print(f"Average Waiting Time: {avg_waiting_time}")
+    print(f"Average Turnaround Time: {avg_turnaround_time}")
+    

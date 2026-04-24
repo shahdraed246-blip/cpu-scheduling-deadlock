@@ -1,0 +1,165 @@
+#Shahd Raed& Nadeen
+import re
+from collections import deque
+class Process:
+    def __init__(self, pid, arrival_time, priority):
+        self.pid = pid
+        self.arrival_time = arrival_time
+        self.priority = priority
+        self.cpu_bursts = []  # List to store CPU bursts
+        self.io_bursts = []  # List to store IO bursts
+        self.remaining_cpu = 0  # Remaining CPU burst time
+        self.wait_time = 0  # Waiting time
+        self.turnaround_time = 0  # Turnaround time
+        self.completed_bursts = 0  # Number of bursts completed
+        self.completion_time = 0  # Completion time
+
+
+    def add_burst(self, cpu_burst, io_burst):
+        self.cpu_bursts.append(cpu_burst)
+        self.io_bursts.append(io_burst)
+        if self.remaining_cpu == 0:  # Initialize remaining CPU time on first burst
+            self.remaining_cpu = cpu_burst
+
+
+def parse_input(file_path):
+    processes = []
+    with open(file_path, "r") as file:
+        for line in file:
+            if not line.strip():
+                continue
+            parts = re.split(r'\s+', line.strip(), maxsplit=3)
+            if len(parts) < 4:
+                print(f"Skipping invalid line: {line.strip()}")
+                continue
+            try:
+                pid = int(parts[0])
+                arrival_time = int(parts[1])
+                priority = int(parts[2])
+                bursts = parse_bursts(parts[3])
+                process = Process(pid, arrival_time, priority)
+                for i in range(0, len(bursts), 2):
+                    cpu_burst = bursts[i][1]
+                    io_burst = bursts[i + 1][1] if i + 1 < len(bursts) else 0
+                    process.add_burst(cpu_burst, io_burst)
+                processes.append(process)
+            except ValueError as e:
+                print(f"Error parsing line: {line.strip()} -> {e}")
+                continue
+    return processes
+
+
+def parse_bursts(burst_string):
+    bursts = []
+    burst_entries = re.findall(r"(CPU|IO)\{(\d+)\}", burst_string)
+    for entry in burst_entries:
+        burst_type, time = entry
+        bursts.append((burst_type, int(time)))
+    return bursts
+
+
+def print_gantt_chart(gantt_chart):
+    gantt_string = ""  # Initialize a string to accumulate the Gantt chart output
+    for pid, start, end in gantt_chart:
+        gantt_string += f"P{pid}[{start}-{end}] "  # Append each process with its execution time
+    print(gantt_string.strip())  # Print the entire Gantt chart on one line, removing extra space at the end
+
+
+def scheduling(processes, time_quantum):
+    processes.sort(key=lambda x: x.arrival_time)  # Sort by arrival time
+
+
+    time = 0  # Current time in the scheduling process
+    gantt_chart = []  # List to hold the Gantt chart
+    completed_processes = []  # List of completed processes
+    ready_queue = deque()  # Ready queue for processes
+    waiting_queue = []  # List of processes waiting for IO to complete
+    process_index = 0  # Index to iterate through processes
+
+
+    while len(completed_processes) < len(processes):
+       
+        # Add processes that have arrived to the ready queue
+        while process_index < len(processes) and processes[process_index].arrival_time <= time:
+            ready_queue.append(processes[process_index])
+            process_index += 1
+
+
+        # Move processes from waiting queue to ready queue if IO burst has completed
+        for io_end_time, process in list(waiting_queue):
+            if io_end_time <= time:
+                waiting_queue.remove((io_end_time, process))
+                process.remaining_cpu = process.cpu_bursts[process.completed_bursts]
+                ready_queue.append(process)
+
+
+        if ready_queue:
+            ready_queue = deque(sorted(ready_queue, key=lambda x: x.priority))  # Sort by priority
+            current_priority = ready_queue[0].priority
+            same_priority_queue = deque([p for p in ready_queue if p.priority == current_priority])
+            ready_queue = deque([p for p in ready_queue if p.priority != current_priority])
+
+
+            while same_priority_queue:
+                process = same_priority_queue.popleft()
+                start_time = time
+                cpu_time = min(process.remaining_cpu, time_quantum)
+
+
+                time += cpu_time
+                gantt_chart.append((process.pid, start_time, time))
+                process.remaining_cpu -= cpu_time
+
+
+                # Add processes to the ready queue as time progresses
+                while process_index < len(processes) and processes[process_index].arrival_time <= time:
+                    ready_queue.append(processes[process_index])
+                    process_index += 1
+
+
+                ready_queue = deque(sorted(ready_queue, key=lambda x: x.priority))  # Re-sort after adding new processes
+
+
+                if ready_queue and ready_queue[0].priority < current_priority:
+                    same_priority_queue.appendleft(process)
+                    break
+
+
+                if process.remaining_cpu == 0:
+                    process.completed_bursts += 1
+                    if process.completed_bursts < len(process.cpu_bursts):
+                        io_burst = process.io_bursts[process.completed_bursts - 1]
+                        io_end_time = time + io_burst
+                        waiting_queue.append((io_end_time, process))
+                    else:
+                        process.completion_time = time
+                        process.turnaround_time = time - process.arrival_time
+                        process.wait_time = process.turnaround_time - (sum(process.cpu_bursts) + sum(process.io_bursts))
+                        completed_processes.append(process)
+                else:
+                    same_priority_queue.append(process)
+
+
+            ready_queue.extend(same_priority_queue)
+        else:
+            time += 1  # Increment time if the ready queue is empty
+
+
+    avg_waiting_time = sum(p.wait_time for p in completed_processes) / len(completed_processes)
+    avg_turnaround_time = sum(p.turnaround_time for p in completed_processes) / len(completed_processes)
+
+
+    return gantt_chart, avg_waiting_time, avg_turnaround_time
+
+
+# Example usage
+file_path = "input.txt"
+time_quantum = 10  # Time quantum for round-robin aspect
+processes = parse_input(file_path)
+gantt_chart, avg_waiting_time, avg_turnaround_time = scheduling(processes, time_quantum)
+
+
+print("Gantt Chart:")
+print_gantt_chart(gantt_chart)
+print("Average Waiting Time:", avg_waiting_time)
+print("Average Turnaround Time:", avg_turnaround_time)
